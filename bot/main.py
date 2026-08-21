@@ -21,7 +21,6 @@ HIDDEN_PIN = os.environ["HIDDEN_PIN"].strip()
 SESSION_MINUTES = int(os.getenv("HIDDEN_SESSION_MINUTES", "30"))
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
 GITHUB_REPOSITORY = os.getenv("GITHUB_REPOSITORY", "aw871229-ui/KuKu_bot")
-VAULT_CHAT_ID = os.getenv("VAULT_CHAT_ID", "").strip()
 INDEX_PATH = "data/vault.enc"
 
 if not re.fullmatch(r"\d{4}", HIDDEN_PIN):
@@ -56,7 +55,7 @@ def lock(context):
 
 
 def fernet():
-    seed = f"KuKuVault-v1|{BOT_TOKEN}|{ADMIN_USER_ID}".encode()
+    seed = f"KuKuVault-v2|{BOT_TOKEN}|{ADMIN_USER_ID}".encode()
     return Fernet(base64.urlsafe_b64encode(hashlib.sha256(seed).digest()))
 
 
@@ -65,7 +64,7 @@ def github_headers():
 
 
 def load_index():
-    default = {"version": 1, "vault_chat_id": int(VAULT_CHAT_ID) if VAULT_CHAT_ID.lstrip("-").isdigit() else None, "items": [], "notes": []}
+    default = {"version": 2, "items": [], "notes": []}
     if not GITHUB_TOKEN:
         return default
     url = f"https://api.github.com/repos/{GITHUB_REPOSITORY}/contents/{INDEX_PATH}"
@@ -75,7 +74,10 @@ def load_index():
             return default
         r.raise_for_status()
         raw = base64.b64decode(r.json()["content"])
-        return json.loads(fernet().decrypt(raw).decode())
+        data = json.loads(fernet().decrypt(raw).decode())
+        data.setdefault("items", [])
+        data.setdefault("notes", [])
+        return data
     except Exception as exc:
         log.warning("Could not load encrypted index: %s", exc)
         return default
@@ -140,7 +142,7 @@ def calculate(text):
 
 
 def http_get(url, timeout=8):
-    r = requests.get(url, timeout=timeout, headers={"User-Agent": "KuKuBot/3.0"})
+    r = requests.get(url, timeout=timeout, headers={"User-Agent": "KuKuBot/4.0"})
     r.raise_for_status()
     return r
 
@@ -216,19 +218,6 @@ async def lock_cmd(update, context):
         await update.effective_message.reply_text("🔒 私人入口已锁定。")
 
 
-async def bind_vault_post(update, context):
-    m = update.channel_post
-    if not m or not m.chat or (m.text or "").strip() != "KU_KU_VAULT_BIND":
-        return
-    data = load_index()
-    data["vault_chat_id"] = m.chat.id
-    try:
-        save_index(data)
-        await m.reply_text("🔐 KuKu Vault 已绑定。", disable_notification=True)
-    except Exception as exc:
-        log.error("vault bind failed: %s", exc)
-
-
 async def save_note_cmd(update, context):
     if not is_admin(update) or not unlocked(context):
         return
@@ -239,32 +228,46 @@ async def save_note_cmd(update, context):
     nid = max([n["id"] for n in data["notes"]] or [0]) + 1
     data["notes"].append({"id": nid, "text": text, "created_at": now()})
     save_index(data)
-    await update.effective_message.reply_text(f"✅ 已永久保存私人信息 #{nid}")
+    await update.effective_message.reply_text(f"✅ 已保存私人信息 #{nid}")
 
 
 async def media(update, context):
+    """Store Telegram media by file_id only. Nothing is copied to a channel."""
     if not is_admin(update) or not unlocked(context):
         return
-    data = load_index()
-    vault = data.get("vault_chat_id")
-    if not vault:
-        return await update.effective_message.reply_text("⚠️ 私人存储库尚未绑定。\n先把机器人设为频道管理员，然后在频道发布：KU_KU_VAULT_BIND")
     m = update.effective_message
     if not (m.photo or m.video or m.document or m.audio or m.voice):
         return
-    try:
-        copied = await context.bot.copy_message(chat_id=vault, from_chat_id=m.chat_id, message_id=m.message_id, disable_notification=True)
-    except Exception as exc:
-        log.exception("copy to vault failed")
-        return await m.reply_text(f"❌ 保存到私人频道失败：{exc}")
-    obj = m.document or m.video or (m.photo[-1] if m.photo else None) or m.audio or m.voice
-    kind = "document" if m.document else "video" if m.video else "photo" if m.photo else "audio" if m.audio else "voice"
-    name = getattr(obj, "file_name", None) or ("photo" if kind == "photo" else kind)
+
+    if m.document:
+        obj, kind, file_id = m.document, "document", m.document.file_id
+    elif m.video:
+        obj, kind, file_id = m.video, "video", m.video.file_id
+    elif m.photo:
+        obj, kind, file_id = m.photo[-1], "photo", m.photo[-1].file_id
+    elif m.audio:
+        obj, kind, file_id = m.audio, "audio", m.audio.file_id
+    else:
+        obj, kind, file_id = m.voice, "voice", m.voice.file_id
+
     data = load_index()
     iid = max([x["id"] for x in data["items"]] or [0]) + 1
-    data["items"].append({"id": iid, "kind": kind, "file_name": name, "caption": m.caption or "", "size": getattr(obj, "file_size", None), "vault_message_id": copied.message_id, "created_at": now()})
-    save_index(data)
-    await m.reply_text(f"✅ 已永久保存 #{iid} | {kind}")
+    name = getattr(obj, "file_name", None) or ("photo" if kind == "photo" else kind)
+    data["items"].append({
+        "id": iid,
+        "kind": kind,
+        "file_id": file_id,
+        "file_name": name,
+        "caption": m.caption or "",
+        "size": getattr(obj, "file_size", None),
+        "created_at": now(),
+    })
+    try:
+        save_index(data)
+    except Exception as exc:
+        log.exception("index save failed")
+        return await m.reply_text(f"❌ 索引保存失败：{exc}")
+    await m.reply_text(f"✅ 已保存 #{iid} | {kind}")
 
 
 async def list_cmd(update, context):
@@ -282,7 +285,7 @@ async def stats_cmd(update, context):
     data = load_index(); counts = {}
     for x in data["items"]:
         counts[x["kind"]] = counts.get(x["kind"], 0) + 1
-    await update.effective_message.reply_text("📊 永久文件统计\n" + ("\n".join(f"{k}: {v}" for k, v in counts.items()) if counts else "暂无数据"))
+    await update.effective_message.reply_text("📊 文件统计\n" + ("\n".join(f"{k}: {v}" for k, v in counts.items()) if counts else "暂无数据"))
 
 
 async def search_cmd(update, context):
@@ -300,13 +303,42 @@ async def search_cmd(update, context):
         await update.effective_message.reply_text("没有找到。")
 
 
+async def send_item(bot, chat_id, item):
+    file_id = item.get("file_id")
+    if not file_id:
+        return False
+    caption = item.get("caption") or None
+    kind = item.get("kind")
+    if kind == "photo":
+        await bot.send_photo(chat_id=chat_id, photo=file_id, caption=caption)
+    elif kind == "video":
+        await bot.send_video(chat_id=chat_id, video=file_id, caption=caption)
+    elif kind == "document":
+        await bot.send_document(chat_id=chat_id, document=file_id, caption=caption)
+    elif kind == "audio":
+        await bot.send_audio(chat_id=chat_id, audio=file_id, caption=caption)
+    elif kind == "voice":
+        await bot.send_voice(chat_id=chat_id, voice=file_id, caption=caption)
+    else:
+        return False
+    return True
+
+
 async def get_item(update, context, iid):
     data = load_index()
     item = next((x for x in data["items"] if x["id"] == iid), None)
     if not item:
         return await update.callback_query.message.reply_text("找不到该文件记录。")
     try:
-        await context.bot.copy_message(chat_id=update.effective_chat.id, from_chat_id=data["vault_chat_id"], message_id=item["vault_message_id"])
+        if await send_item(context.bot, update.effective_chat.id, item):
+            return
+        # Compatibility for older records created before the file_id-only mode.
+        vault = data.get("vault_chat_id")
+        old_mid = item.get("vault_message_id")
+        if vault and old_mid:
+            await context.bot.copy_message(chat_id=update.effective_chat.id, from_chat_id=vault, message_id=old_mid)
+            return
+        await update.callback_query.message.reply_text("❌ 该旧记录没有可用的文件 ID。")
     except Exception as exc:
         await update.callback_query.message.reply_text(f"❌ 取回失败：{exc}")
 
@@ -359,10 +391,9 @@ def main():
     app.add_handler(CommandHandler("search", search_cmd))
     app.add_handler(CommandHandler("stats", stats_cmd))
     app.add_handler(CallbackQueryHandler(button))
-    app.add_handler(MessageHandler(filters.UpdateType.CHANNEL_POSTS, bind_vault_post))
     app.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO | filters.Document.ALL | filters.AUDIO | filters.VOICE, media))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_router))
-    log.info("KuKu bot starting with Telegram Vault + encrypted GitHub index")
+    log.info("KuKu bot starting with Telegram file_id storage + encrypted GitHub index")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
