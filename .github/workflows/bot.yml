@@ -25,4 +25,6 @@ jobs:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           ADMIN_USER_ID: ${{ secrets.ADMIN_USER_ID }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          HIDDEN_PIN: ${{ secrets.HIDDEN_PIN }}
+          HIDDEN_SESSION_MINUTES: ${{ secrets.HIDDEN_SESSION_MINUTES }}
         run: python -m bot.main
