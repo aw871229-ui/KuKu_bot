@@ -23,7 +23,7 @@ BOT_TOKEN = os.environ["BOT_TOKEN"]
 ADMIN_USER_ID = int(os.environ["ADMIN_USER_ID"])
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 HIDDEN_PIN = os.getenv("HIDDEN_PIN", "").strip()
-SESSION_MINUTES = int(os.getenv("HIDDEN_SESSION_MINUTES", "30"))
+SESSION_MINUTES = int(os.getenv("HIDDEN_SESSION_MINUTES") or "30")
 
 if not re.fullmatch(r"\d{4}", HIDDEN_PIN):
     raise RuntimeError("HIDDEN_PIN must be exactly 4 digits")
