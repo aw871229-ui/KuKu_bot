@@ -10,7 +10,7 @@ from datetime import datetime, timezone, timedelta
 import requests
 from cryptography.fernet import Fernet
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s", level=logging.INFO)
 log = logging.getLogger("kuku")
@@ -55,7 +55,8 @@ def lock(context):
 
 
 def fernet():
-    seed = f"KuKuVault-v2|{BOT_TOKEN}|{ADMIN_USER_ID}".encode()
+    # Keep v1 derivation so existing encrypted vault indexes remain readable.
+    seed = f"KuKuVault-v1|{BOT_TOKEN}|{ADMIN_USER_ID}".encode()
     return Fernet(base64.urlsafe_b64encode(hashlib.sha256(seed).digest()))
 
 
@@ -332,7 +333,7 @@ async def get_item(update, context, iid):
     try:
         if await send_item(context.bot, update.effective_chat.id, item):
             return
-        # Compatibility for older records created before the file_id-only mode.
+        # Compatibility for older records created before file_id-only mode.
         vault = data.get("vault_chat_id")
         old_mid = item.get("vault_message_id")
         if vault and old_mid:
@@ -393,7 +394,7 @@ def main():
     app.add_handler(CallbackQueryHandler(button))
     app.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO | filters.Document.ALL | filters.AUDIO | filters.VOICE, media))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_router))
-    log.info("KuKu bot starting with Telegram file_id storage + encrypted GitHub index")
+    log.info("KuKu bot starting with invisible Telegram file_id storage + encrypted GitHub index")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
